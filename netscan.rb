@@ -3,10 +3,45 @@
 require 'optparse'
 require 'pp'
 require 'netaddr'
+require 'terminal-table'
+
+class Port
+	# Basically just an Integer that can have flags set on it for ports. Port 80 responded to http or not
+
+	attr_accessor :port, :http
+	
+
+	def initialize
+		@port = nil
+		@http = false
+	end
+
+	def initialize(port)
+		@port = port
+		@http = false
+	end
+
+	def initialize(port,http)
+		@port = port
+		@http = http
+	end
+
+	def to_s
+		"#{@port}#{"*" if @http}"
+	end
+
+	def to_i
+		@port
+	end
+
+end
+
 
 class Netscan
 
 	attr_reader :config
+
+	@output = []
 
 	def initialize(args)
 
@@ -79,8 +114,12 @@ class Netscan
 
 	end
 
-	def log_it(message)
-		@logfile.puts "#{Time.now} | #{message}"
+	def log_it(host, ports)
+		@output <<  [Time.now, host, ports.join(",")]
+	end
+
+	def test_ports
+		[]
 	end
 
 	def scan
@@ -93,15 +132,22 @@ class Netscan
 			# Skip the first and last address in the range, assuming they are network number (i.e. 192.168.1.0) and broadcast (192.168.1.255)
  			next if (addr == first) or (addr == last)
 
+			# Returns an array of Port class objects
 			p = test_ports addr
-			h = test_http addr, p
 
 			if !p.empty?
-				# p has ports, h has ports that responded to http
+				# There's something to log...
+				log_it addr, p
+				
 			end
 			
 		end
 	end
+
+	def report
+		Terminal::Table.new :headings => ['Time','Host','Ports (* indicates HTTP response)'], :rows => @output
+	end
+		
 
 end
 
@@ -110,7 +156,4 @@ pp netscan.config
 exit
 
 netscan.scan
-
-
-puts x.first
-puts x.last
+puts netscan.report
