@@ -3,7 +3,10 @@
 require 'optparse'
 require 'pp'
 require 'netaddr'
+require 'socket'
 require 'terminal-table'
+require 'net/http'
+require 'uri'
 
 class Port
 	# Basically just an Integer that can have flags set on it for ports. Port 80 responded to http or not
@@ -11,17 +14,7 @@ class Port
 	attr_accessor :port, :http
 	
 
-	def initialize
-		@port = nil
-		@http = false
-	end
-
-	def initialize(port)
-		@port = port
-		@http = false
-	end
-
-	def initialize(port,http)
+	def initialize(port=nil,http=false)
 		@port = port
 		@http = http
 	end
@@ -41,7 +34,6 @@ class Netscan
 
 	attr_reader :config
 
-	@output = []
 
 	def initialize(args)
 
@@ -112,14 +104,81 @@ class Netscan
 		# Open output file
 		@logfile = File.open @config[:outfile], "w"
 
+		# Init output array
+		@output = []
+
 	end
 
 	def log_it(host, ports)
 		@output <<  [Time.now, host, ports.join(",")]
 	end
 
-	def test_ports
-		[]
+	def conncheck(host, port, timeout=1)
+		# Timeout process copied from https://spin.atomicobject.com/2013/09/30/socket-connection-timeout-ruby/
+		# Normal host timeout takes too long
+
+		addr = Socker.getaddrinfo(host, nil)
+		sockaddr = Socker.pack_sockaddr_in(port, addr[0][3])
+
+		Socket.net(Socker.const_get(addr[0][0]), Socker::SOCK_STREAM, 0).tap do |socket|
+			socker.setsockopt(Socker::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
+			begin
+				# Init socket connection. It will fail immediately or raise IO::WaitWritable 
+				# if the connection is in progress
+				socket.connect_noblock(sockaddr)
+			rescue IO::WaitWritable
+				# IO.select blocks until socket is writable or timeout elapses. Whichever comes first
+				if IO.select nil, [socket], nil, timeout 
+					begin
+						# Verify good connection
+						socket.connect_nonblock(sockaddr)
+					rescue Errno:EISCONN
+						# Connection succeeded
+						return true
+					rescue
+						# Other error - socket is not usable
+						socket.close
+						return false
+						
+					end
+				else
+					# Socket was not ready
+					socket.close
+					return false
+				end
+			end
+		end
+	end
+
+	def test_ports(host)
+
+		results = []
+
+		@config[:ports].each do |port|
+			begin
+				s = Socket.new(:INET, :STREAM)
+				c = Socket.sockaddr_in(port, host)
+				if s.connect(c)
+					results << Port.new(port)
+				end
+
+				# Test for HTTP because why not
+				Net::HTTP.get(URI.parse("http://#{host}:#{port}"))
+				
+				# If not HTTP will throw an exception, if it IS we are still here, so set flag
+				results.last.http = true
+				
+				
+			# If there are errors at any point we rescue and stop processing that port
+			rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, Net::HTTPBadResponse, Errno::ENETUNREACH, Errno::EHOSTUNREACH
+				
+			end
+			
+		end		
+
+		# Pass back array
+		results	
+		
 	end
 
 	def scan
@@ -130,7 +189,9 @@ class Netscan
 
 		cidr.enumerate.each do |addr|
 			# Skip the first and last address in the range, assuming they are network number (i.e. 192.168.1.0) and broadcast (192.168.1.255)
- 			next if (addr == first) or (addr == last)
+ 			#next if (addr == first) or (addr == last)
+
+			puts "Scanning: #{addr}"
 
 			# Returns an array of Port class objects
 			p = test_ports addr
@@ -145,6 +206,7 @@ class Netscan
 	end
 
 	def report
+		@output = [ ["No findings","",""] ] if @output.empty?	
 		Terminal::Table.new :headings => ['Time','Host','Ports (* indicates HTTP response)'], :rows => @output
 	end
 		
@@ -153,7 +215,7 @@ end
 
 netscan = Netscan.new ARGV
 pp netscan.config
-exit
 
 netscan.scan
 puts netscan.report
+pp netscan
