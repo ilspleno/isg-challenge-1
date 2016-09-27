@@ -35,6 +35,7 @@ end
 
 class Netscan
 
+	# Allow the configuration to be directly read
 	attr_reader :config
 
 
@@ -45,6 +46,7 @@ class Netscan
 		           :test_for_http => false,
 			   :verbose       => false }
 
+		# Parse command line options
 		parser = OptionParser.new do |o|
 
 			o.banner = "Usage: netscan.rb [options]"
@@ -123,7 +125,7 @@ class Netscan
 		# Init hash
 		@approved = {}
 
-		
+		# Resolve each host and store all as IP addresses in a hash for easy lookup	
 		@config[:approved].each do |host|
 			begin
 				ip = Resolv.getaddress host
@@ -138,6 +140,8 @@ class Netscan
 
 	def log_it(host, ports)
 
+		# We're storing the output as a three element array so it can be sent to the table object and printed.
+
 		hoststring = host
 		begin
 			hoststring = hoststring + "(#{Resolv.getname host})"
@@ -148,9 +152,12 @@ class Netscan
 	end
 
 	def conncheck(host, port, timeout=0.1)
+		# Using the method to override the system timeout. Most systems wait several seconds for a TCP connection to be established which makes for a long scan.
+
 		# Timeout process copied from https://spin.atomicobject.com/2013/09/30/socket-connection-timeout-ruby/
 		# Normal host timeout takes too long
 
+		# Get information needed to open socket
 		addr = Socket.getaddrinfo(host, nil)
 		sockaddr = Socket.pack_sockaddr_in(port, addr[0][3])
 
@@ -194,6 +201,7 @@ class Netscan
 
 		results = []
 
+		# For a single host, scan each port using conncheck
 		@config[:ports].each do |port|
 
 			puts "---> Port #{port}" if @config[:verbose]
@@ -223,6 +231,8 @@ class Netscan
 	end
 
 	def scan
+
+		# Create an object to respresent the subnet
 		cidr = NetAddr::CIDR.create @config[:network]
 
 		first = cidr.first
@@ -240,7 +250,7 @@ class Netscan
 				next
 			end
 
-			# Returns an array of Port class objects
+			# Returns an array of Port class objects that were "hits"
 			p = test_ports addr
 
 			if !p.empty?
@@ -253,6 +263,9 @@ class Netscan
 	end
 
 	def report
+
+		# Dump the array we are keeping of results into Terminal::Table so it's pretty
+
 		@output = [ ["No findings","",""] ] if @output.empty?	
 		Terminal::Table.new :headings => ['Time','Host','Ports (* indicates HTTP response)'], :rows => @output
 	end
@@ -260,14 +273,65 @@ class Netscan
 
 end
 
+#### A quickie method to verify the necessary ruby libraries (gems) are installed
+def gem_available?(name)
+
+	# Returns an object if found
+	Gem::Specification.find_by_name(name)
+
+rescue Gem::LoadError
+
+	# And throws an exception (sigh) if not
+	false
+
+rescue
+
+	# Old pre-2 method that's only available if Gem::Specification isn't
+	Gem.available?(name)
+
+end
+
+# Quick check that libs are available
+g = []
+["netaddr","terminal-table"].each do |gem|
+	g << gem if !gem_available?(gem)
+end
+
+if !g.empty?
+	# Crap, missing libs
+	puts
+	puts "Hi there!"
+	puts
+	puts "In order for this script to run it requires some libraries (gem files). Please install the following libraries"
+	puts "by executing \"gem install libraryname\" for each library mentioned below:"
+	puts
+	g.each do |gem|
+		puts "     #{gem}"
+	end
+	puts
+	puts "The script will execute normally once that's done. Sorry for the inconvenience!"
+	puts
+	exit 1
+end
+
+# Main
+
+# Create a netscan object and pass it command line parameters
 netscan = Netscan.new ARGV
 
+# For debugging, displays the final config after parsing command line
 pp netscan.config if DEBUG
 
+# Do actual scan
 netscan.scan
+
+# Get Report generated from collected data
 report = netscan.report
+
+# Print to screen
 puts report
 
+# Print to file
 # Open output file
 begin
 	out = File.open(netscan.config[:outfile], "w")
@@ -277,5 +341,5 @@ rescue => e
 	puts "Error writing logfile. Error is: #{e.message}"
 end
 
-
+# Dump netscan object for debugging if enabled
 pp netscan if DEBUG
