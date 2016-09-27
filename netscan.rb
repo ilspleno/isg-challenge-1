@@ -7,6 +7,7 @@ require 'socket'
 require 'terminal-table'
 require 'net/http'
 require 'uri'
+require 'resolv'
 
 DEBUG = false
 
@@ -108,16 +109,42 @@ class Netscan
 		# Set approved list as empty array if not specified
 		@config[:approved] = [] if config[:approved].nil?
 
-		# Open output file
-		@logfile = File.open @config[:outfile], "w"
 
 		# Init output array
 		@output = []
 
+		# Load hash of IP addresses that are allowed to make positive hits
+		load_approved
+
+	end
+
+	def load_approved
+
+		# Init hash
+		@approved = {}
+
+		
+		@config[:approved].each do |host|
+			begin
+				ip = Resolv.getaddress host
+				@approved[ip] = host
+			rescue
+				# If an error was thrown the entry did not resolve via DNS. Skip it, and hope the user spells it right next time
+			end
+					
+		end	
+
 	end
 
 	def log_it(host, ports)
-		@output <<  [Time.now, host, ports.join(",")]
+
+		hoststring = host
+		begin
+			hoststring = hoststring + "(#{Resolv.getname host})"
+		rescue
+			# If we hit this block, could not resolve IP
+		end
+		@output <<  [Time.now, hoststring, ports.join(",")]
 	end
 
 	def conncheck(host, port, timeout=0.1)
@@ -207,6 +234,12 @@ class Netscan
 
 			puts "Scanning: #{addr}" if @config[:verbose]
 
+			# Skip this host if it is on the approved list
+			if @approved.keys.include? addr			
+				puts "This host is approved, skipping" if @config[:verbose]
+				next
+			end
+
 			# Returns an array of Port class objects
 			p = test_ports addr
 
@@ -228,8 +261,21 @@ class Netscan
 end
 
 netscan = Netscan.new ARGV
+
 pp netscan.config if DEBUG
 
 netscan.scan
-puts netscan.report
+report = netscan.report
+puts report
+
+# Open output file
+begin
+	out = File.open(netscan.config[:outfile], "w")
+	out.puts report
+	puts "Report written to #{netscan.config[:outfile]}"
+rescue => e
+	puts "Error writing logfile. Error is: #{e.message}"
+end
+
+
 pp netscan if DEBUG
