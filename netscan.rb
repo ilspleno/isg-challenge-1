@@ -8,6 +8,8 @@ require 'terminal-table'
 require 'net/http'
 require 'uri'
 
+DEBUG = false
+
 class Port
 	# Basically just an Integer that can have flags set on it for ports. Port 80 responded to http or not
 
@@ -38,8 +40,9 @@ class Netscan
 	def initialize(args)
 
 		# Init options hash
-		@config = {:outfile 	 => "netscan.log", 
-		          :test_for_http => false}
+		@config = {:outfile 	  => "netscan.log", 
+		           :test_for_http => false,
+			   :verbose       => false }
 
 		parser = OptionParser.new do |o|
 
@@ -82,6 +85,10 @@ class Netscan
 			o.on "-t", "--test", "Test for an HTTP response in addition to an open port" do |t|
 				@config[:test_for_http] = true
 			end
+
+			o.on("-v", "--[no-]verbose", "Run verbosely") do |v|
+				@config[:verbose] = true
+			end
 			
 		
 		end
@@ -113,26 +120,27 @@ class Netscan
 		@output <<  [Time.now, host, ports.join(",")]
 	end
 
-	def conncheck(host, port, timeout=1)
+	def conncheck(host, port, timeout=0.1)
 		# Timeout process copied from https://spin.atomicobject.com/2013/09/30/socket-connection-timeout-ruby/
 		# Normal host timeout takes too long
 
-		addr = Socker.getaddrinfo(host, nil)
-		sockaddr = Socker.pack_sockaddr_in(port, addr[0][3])
+		addr = Socket.getaddrinfo(host, nil)
+		sockaddr = Socket.pack_sockaddr_in(port, addr[0][3])
 
-		Socket.net(Socker.const_get(addr[0][0]), Socker::SOCK_STREAM, 0).tap do |socket|
-			socker.setsockopt(Socker::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
+		Socket.new(Socket.const_get(addr[0][0]), Socket::SOCK_STREAM, 0).tap do |socket|
+			socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
 			begin
 				# Init socket connection. It will fail immediately or raise IO::WaitWritable 
 				# if the connection is in progress
-				socket.connect_noblock(sockaddr)
+				socket.connect_nonblock(sockaddr)
 			rescue IO::WaitWritable
 				# IO.select blocks until socket is writable or timeout elapses. Whichever comes first
 				if IO.select nil, [socket], nil, timeout 
 					begin
 						# Verify good connection
 						socket.connect_nonblock(sockaddr)
-					rescue Errno:EISCONN
+						puts "---------------> Hit!" if @config[:verbose]
+					rescue Errno::EISCONN
 						# Connection succeeded
 						return true
 					rescue
@@ -146,6 +154,11 @@ class Netscan
 					socket.close
 					return false
 				end
+			rescue
+				# Other Network I/O error
+				socket.close
+				return false
+				
 			end
 		end
 	end
@@ -155,25 +168,26 @@ class Netscan
 		results = []
 
 		@config[:ports].each do |port|
-			begin
-				s = Socket.new(:INET, :STREAM)
-				c = Socket.sockaddr_in(port, host)
-				if s.connect(c)
-					results << Port.new(port)
-				end
 
-				# Test for HTTP because why not
-				Net::HTTP.get(URI.parse("http://#{host}:#{port}"))
+			puts "---> Port #{port}" if @config[:verbose]
+
+			if conncheck(host, port)	
+				# Store the positive result
+				results << Port.new(port)
+				begin
+
+					# Test for HTTP because why not
+					Net::HTTP.get(URI.parse("http://#{host}:#{port}"))
+					
+					# If not HTTP will throw an exception, if it IS we are still here, so set flag
+					results.last.http = true
+					puts "---------------> HTTP Response" if @config[:verbose]
 				
-				# If not HTTP will throw an exception, if it IS we are still here, so set flag
-				results.last.http = true
-				
-				
-			# If there are errors at any point we rescue and stop processing that port
-			rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, Net::HTTPBadResponse, Errno::ENETUNREACH, Errno::EHOSTUNREACH
-				
+				rescue Errno::ECONNREFUSED, Errno::ETIMEDOUT, Net::HTTPBadResponse, Errno::ENETUNREACH, Errno::EHOSTUNREACH
+					# If we're here then the http get failed, so nothing to add to the Port object
+
+				end
 			end
-			
 		end		
 
 		# Pass back array
@@ -191,7 +205,7 @@ class Netscan
 			# Skip the first and last address in the range, assuming they are network number (i.e. 192.168.1.0) and broadcast (192.168.1.255)
  			#next if (addr == first) or (addr == last)
 
-			puts "Scanning: #{addr}"
+			puts "Scanning: #{addr}" if @config[:verbose]
 
 			# Returns an array of Port class objects
 			p = test_ports addr
@@ -214,8 +228,8 @@ class Netscan
 end
 
 netscan = Netscan.new ARGV
-pp netscan.config
+pp netscan.config if DEBUG
 
 netscan.scan
 puts netscan.report
-pp netscan
+pp netscan if DEBUG
